@@ -101,7 +101,7 @@ def save_images(board, squares):
 
     for label, square in zip(board.flatten(), squares):
         class_name = reverse_abbrev[label]
-        out_dir = os.path.join("data", "NewDataset", class_name)
+        out_dir = os.path.join("data", "NewDataset3", class_name)
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"{uuid.uuid4()}.jpg")
         cv2.imwrite(path, cv2.cvtColor(square, cv2.COLOR_RGB2BGR))
@@ -135,33 +135,36 @@ def extract_board(img):
     result = result[vert_crop:-vert_crop, horiz_crop:-horiz_crop]
 
     return result
+cap = cv2.VideoCapture("http://192.168.2.21:8080/video")  # DroidCam default URL
 
+ret, frame = cap.read()
+roi = cv2.selectROI("select board", frame, showCrosshair=True)
+x, y, w, h = roi
+cv2.destroyAllWindows()
 
-
-cap = cv2.VideoCapture(1)  # 0 = default camera
-i = cv2.imread("img2.jpg")
+# cap = cv2.VideoCapture(0)  # 0 = default camera
 model = torch.load("models/model.pth", map_location="mps", weights_only=False)
 
 while True:
     ret, frame = cap.read()
-    # if not ret:
-    #     break
+    frame = frame[y:y + h, x:x + w] #cropping
+    if not ret:
+        break
 
     cv2.imshow("stream", frame)
 
     key = cv2.waitKey(1) & 0xFF
-    if key == ord('s'):       # press S to capture
+    if key == ord('q'):
+        break
+
+    if key == ord('c'):
         print("Captured")
-        board_img = extract_board(i)
+        board_img = extract_board(frame)
         squares = extract_chess_squares(board_img)
         board = run_inference(model, squares)
         save_images(board, squares)
         for row in board:
             print(" ".join(row))
-        cv2.waitKey(0)
-
-    elif key == ord('q'):     # press Q to quit
-        break
 
 cap.release()
 cv2.destroyAllWindows()
