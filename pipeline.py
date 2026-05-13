@@ -7,15 +7,19 @@ import torchvision
 import torchvision.transforms as T
 from PIL import Image
 
+import chess.engine
+import chess.svg
+import chess
+
+import cairosvg
+
+
 def run_inference(model, images):
-    device = torch.device("mps")
-    model.to(device)
     model.eval()
     transform = T.Compose([
         T.Resize((224, 224)),
-        T.ToTensor(),  # HWC numpy/PIL → CHW float tensor, scales [0,255] → [0,1]
+        T.ToTensor(),
         T.Normalize(mean=[0.485, 0.456, 0.406],
-                    # ImageNet mean/std, use these if your backbone was pretrained on ImageNet
                     std=[0.229, 0.224, 0.225])
     ])
     batch = torch.stack([
@@ -31,30 +35,29 @@ def run_inference(model, images):
     idx_to_class = {
         0: "Bishop (B)",
         1: "Bishop (W)",
-        2: "Empty (B)",
-        3: "Empty (W)",
-        4: "King (B)",
-        5: "King (W)",
-        6: "Knight (B)",
-        7: "Knight (W)",
-        8: "Pawn (B)",
-        9: "Pawn (W)",
-        10: "Queen (B)",
-        11: "Queen (W)",
-        12: "Rook (B)",
-        13: "Rook (W)",
+        2: "Empty",
+        3: "King (B)",
+        4: "King (W)",
+        5: "Knight (B)",
+        6: "Knight (W)",
+        7: "Pawn (B)",
+        8: "Pawn (W)",
+        9: "Queen (B)",
+        10: "Queen (W)",
+        11: "Rook (B)",
+        12: "Rook (W)",
     }
 
     pred_labels = [idx_to_class[i] for i in preds]
 
     abbrev = {
-        "Bishop (B)": "bB", "Bishop (W)": "wB",
-        "Empty (B)": "_.", "Empty (W)": " .",
-        "King (B)": "bK", "King (W)": "wK",
-        "Knight (B)": "bN", "Knight (W)": "wN",
-        "Pawn (B)": "bP", "Pawn (W)": "wP",
-        "Queen (B)": "bQ", "Queen (W)": "wQ",
-        "Rook (B)": "bR", "Rook (W)": "wR",
+        "Bishop (B)": "b", "Bishop (W)": "B",
+        "Empty": ".",
+        "King (B)": "k", "King (W)": "K",
+        "Knight (B)": "n", "Knight (W)": "N",
+        "Pawn (B)": "p", "Pawn (W)": "P",
+        "Queen (B)": "q", "Queen (W)": "Q",
+        "Rook (B)": "r", "Rook (W)": "R",
     }
 
     board = np.array([abbrev[l] for l in pred_labels]).reshape(8, 8)
@@ -90,18 +93,18 @@ def extract_chess_squares(img):
 
 def save_images(board, squares):
     reverse_abbrev = {
-        "bB": "Bishop (B)", "wB": "Bishop (W)",
-        " .": "Empty (W)", "_.": "Empty (B)",
-        "bK": "King (B)", "wK": "King (W)",
-        "bN": "Knight (B)", "wN": "Knight (W)",
-        "bP": "Pawn (B)", "wP": "Pawn (W)",
-        "bQ": "Queen (B)", "wQ": "Queen (W)",
-        "bR": "Rook (B)", "wR": "Rook (W)",
+        "b": "Bishop (B)", "B": "Bishop (W)",
+        ".": "Empty",
+        "k": "King (B)", "K": "King (W)",
+        "n": "Knight (B)", "N": "Knight (W)",
+        "p": "Pawn (B)", "P": "Pawn (W)",
+        "q": "Queen (B)", "Q": "Queen (W)",
+        "r": "Rook (B)", "R": "Rook (W)",
     }
 
     for label, square in zip(board.flatten(), squares):
         class_name = reverse_abbrev[label]
-        out_dir = os.path.join("data", "NewDataset3", class_name)
+        out_dir = os.path.join("data", "NewDataset4", class_name)
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"{uuid.uuid4()}.jpg")
         cv2.imwrite(path, cv2.cvtColor(square, cv2.COLOR_RGB2BGR))
@@ -135,23 +138,87 @@ def extract_board(img):
     result = result[vert_crop:-vert_crop, horiz_crop:-horiz_crop]
 
     return result
-cap = cv2.VideoCapture("http://192.168.2.21:8080/video")  # DroidCam default URL
+
+def board_to_numpy(board):
+    arr = np.full((8, 8), '.', dtype='<U2')
+    for sq in chess.SQUARES:
+        piece = board.piece_at(sq)
+        if piece:
+            arr[7 - (sq // 8)][sq % 8] = piece.symbol()  # rank flip for visual orientation
+    return arr
+
+def board_to_img(board, size=480):
+    svg = chess.svg.board(board)
+    png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
+    arr = np.frombuffer(png, np.uint8)
+    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+# Set up chess engine
+engine = chess.engine.SimpleEngine.popen_uci("./stockfish-macos-m1-apple-silicon")
+gboard = chess.Board()
+gboard_img = board_to_img(gboard)
+
+# Convert board from FEN to a Numpy Array
+npboard = board_to_numpy(gboard)
+for row in npboard:
+    print(" ".join(row))
+
+
+cap = cv2.VideoCapture("http://192.168.2.21:8080/video")  # IP Webcam URL
+
+# ret, frame = cap.read()
+# roi = cv2.selectROI("select board", frame, showCrosshair=True)
+# x, y, w, h = roi
+# cv2.destroyAllWindows()
+
+# ======== Undo the camera lens distortion start
+corners = []
+
+def click(event, x, y, flags, param):
+    if event == cv2.EVENT_LBUTTONDOWN and len(corners) < 4:
+        corners.append([x, y])
+        print(f"corner {len(corners)}: ({x}, {y})")
 
 ret, frame = cap.read()
-roi = cv2.selectROI("select board", frame, showCrosshair=True)
-x, y, w, h = roi
+cv2.imshow("pick corners", frame)
+cv2.setMouseCallback("pick corners", click)
+
+while len(corners) < 4:
+    cv2.waitKey(1)
+
 cv2.destroyAllWindows()
+pts_src = np.float32(corners)
 
-# cap = cv2.VideoCapture(0)  # 0 = default camera
-model = torch.load("models/model.pth", map_location="mps", weights_only=False)
+size = 1792  # output board size in pixels, 1792 = 224px per square
+pts_dst = np.float32([
+    [0,    0   ],
+    [size, 0   ],
+    [size, size],
+    [0,    size],
+])
 
+M = cv2.getPerspectiveTransform(pts_src, pts_dst)
+
+# ======== Undo the camera lens distortion end
+
+# change mps to cpu or cuda for non Apple Silicon devices
+device = torch.device("mps")
+model = torch.load("models/model4.pth", map_location="mps", weights_only=False)
+model.to(device)
+
+# main loop
 while True:
     ret, frame = cap.read()
-    frame = frame[y:y + h, x:x + w] #cropping
+    # frame = frame[y:y + h, x:x + w] #cropping
+    # fixing camera warp based on the warp transform we got earlier
+    frame = cv2.warpPerspective(frame, M, (size, size))
     if not ret:
         break
 
-    cv2.imshow("stream", frame)
+    display_frame = cv2.resize(frame, (480, 480)) # smaller frame to show on the window (bigger one is used internally)
+    s = np.hstack([display_frame, gboard_img])
+
+    cv2.imshow("SIChess", s)
 
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
@@ -159,12 +226,36 @@ while True:
 
     if key == ord('c'):
         print("Captured")
-        board_img = extract_board(frame)
+        # board_img = extract_board(frame)
+        board_img = frame
         squares = extract_chess_squares(board_img)
         board = run_inference(model, squares)
-        save_images(board, squares)
         for row in board:
             print(" ".join(row))
 
+        # check to see if the current board matches one of the legal boards possible
+        legal_flag = False
+        for move in gboard.legal_moves:
+            gboard.push(move)
+            if np.array_equal(board_to_numpy(gboard), board):
+                legal_flag = True
+                break
+
+            gboard.pop()  # restore
+
+
+        if not legal_flag:
+            print("Illegal board state detected.")
+            break
+
+        # Get chess engine to play the next move right after
+        move = engine.play(gboard, chess.engine.Limit(time=0.1))
+        gboard.push(move.move)
+
+        # save_images(board, squares)
+
+        gboard_img = board_to_img(gboard)
+
+engine.close()
 cap.release()
 cv2.destroyAllWindows()
