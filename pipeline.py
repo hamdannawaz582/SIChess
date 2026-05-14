@@ -6,6 +6,7 @@ import torch
 import torchvision
 import torchvision.transforms as T
 from PIL import Image
+from PIL import ImageDraw
 
 import chess.engine
 import chess.svg
@@ -147,14 +148,14 @@ def board_to_numpy(board):
             arr[7 - (sq // 8)][sq % 8] = piece.symbol()  # rank flip for visual orientation
     return arr
 
-def board_to_img(board, size=480):
-    svg = chess.svg.board(board)
+def board_to_img(board, size=480, lastmove=None):
+    svg = chess.svg.board(board, lastmove=lastmove)
     png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
     arr = np.frombuffer(png, np.uint8)
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 # Set up chess engine
-engine = chess.engine.SimpleEngine.popen_uci("./stockfish-macos-m1-apple-silicon")
+engine = chess.engine.SimpleEngine.popen_uci("stockfish")
 gboard = chess.Board()
 gboard_img = board_to_img(gboard)
 
@@ -164,7 +165,7 @@ for row in npboard:
     print(" ".join(row))
 
 
-cap = cv2.VideoCapture("http://192.168.2.21:8080/video")  # IP Webcam URL
+cap = cv2.VideoCapture("http://10.167.210.238:8080/video")  # IP Webcam URL
 
 # ret, frame = cap.read()
 # roi = cv2.selectROI("select board", frame, showCrosshair=True)
@@ -202,11 +203,12 @@ M = cv2.getPerspectiveTransform(pts_src, pts_dst)
 # ======== Undo the camera lens distortion end
 
 # change mps to cpu or cuda for non Apple Silicon devices
-device = torch.device("mps")
-model = torch.load("models/model4.pth", map_location="mps", weights_only=False)
+device = torch.device("cpu")
+model = torch.load("models/model4.pth", map_location="cpu", weights_only=False)
 model.to(device)
 
 # main loop
+last_move_text = None
 while True:
     ret, frame = cap.read()
     # frame = frame[y:y + h, x:x + w] #cropping
@@ -216,7 +218,14 @@ while True:
         break
 
     display_frame = cv2.resize(frame, (480, 480)) # smaller frame to show on the window (bigger one is used internally)
-    s = np.hstack([display_frame, gboard_img])
+    header = np.zeros((40, 960, 3), dtype=np.uint8)
+    pil_header = Image.fromarray(cv2.cvtColor(header, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_header)
+    draw.text((10, 10), f"Engine played: {last_move_text}" if last_move_text else "Waiting...", fill=(255, 255, 255))
+    header = cv2.cvtColor(np.array(pil_header), cv2.COLOR_RGB2BGR)
+
+    row = np.hstack([display_frame, gboard_img])
+    s = np.vstack([header, row])
 
     cv2.imshow("SIChess", s)
 
@@ -251,10 +260,11 @@ while True:
         # Get chess engine to play the next move right after
         move = engine.play(gboard, chess.engine.Limit(time=0.1))
         gboard.push(move.move)
+        last_move_text = str(move.move)
 
-        # save_images(board, squares)
-
-        gboard_img = board_to_img(gboard)
+        save_images(board, squares)
+        print(f"Engine played: {move.move}")
+        gboard_img = board_to_img(gboard, lastmove=move.move)
 
 engine.close()
 cap.release()
