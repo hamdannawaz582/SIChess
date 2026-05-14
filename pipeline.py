@@ -110,6 +110,24 @@ def save_images(board, squares):
         path = os.path.join(out_dir, f"{uuid.uuid4()}.jpg")
         cv2.imwrite(path, cv2.cvtColor(square, cv2.COLOR_RGB2BGR))
 
+def eval_bar(eval_val, height=480, width=20):
+    if eval_val == "+M": w_frac = 1.0
+    elif eval_val == "-M": w_frac = 0.0
+    else: w_frac = (max(-9, min(9, eval_val)) + 9) / 18
+    bar = np.zeros((height, width, 3), dtype=np.uint8)
+    split = int((1 - w_frac) * height)
+    bar[:split] = (50, 50, 50)
+    bar[split:] = (220, 220, 220)
+    return bar
+
+def material_eval(board):
+    values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+    score = 0
+    for piece_type, value in values.items():
+        score += len(board.pieces(piece_type, chess.WHITE)) * value
+        score -= len(board.pieces(piece_type, chess.BLACK)) * value
+    return score
+
 def extract_board(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -165,7 +183,7 @@ for row in npboard:
     print(" ".join(row))
 
 
-cap = cv2.VideoCapture("http://10.167.210.238:8080/video")  # IP Webcam URL
+cap = cv2.VideoCapture("http://10.204.64.18:8080/video")  # IP Webcam URL
 
 # ret, frame = cap.read()
 # roi = cv2.selectROI("select board", frame, showCrosshair=True)
@@ -209,6 +227,7 @@ model.to(device)
 
 # main loop
 last_move_text = None
+last_eval_cp = 0
 while True:
     ret, frame = cap.read()
     # frame = frame[y:y + h, x:x + w] #cropping
@@ -218,13 +237,10 @@ while True:
         break
 
     display_frame = cv2.resize(frame, (480, 480)) # smaller frame to show on the window (bigger one is used internally)
-    header = np.zeros((40, 960, 3), dtype=np.uint8)
-    pil_header = Image.fromarray(cv2.cvtColor(header, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(pil_header)
-    draw.text((10, 10), f"Engine played: {last_move_text}" if last_move_text else "Waiting...", fill=(255, 255, 255))
-    header = cv2.cvtColor(np.array(pil_header), cv2.COLOR_RGB2BGR)
-
-    row = np.hstack([display_frame, gboard_img])
+    header = np.zeros((40, 980, 3), dtype=np.uint8)
+    cv2.putText(header, f"Engine: {last_move_text} | Eval: {last_eval_cp}" if last_move_text else "Waiting...",
+                (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    row = np.hstack([display_frame, gboard_img, eval_bar(last_eval_cp)])
     s = np.vstack([header, row])
 
     cv2.imshow("SIChess", s)
@@ -258,10 +274,10 @@ while True:
             break
 
         # Get chess engine to play the next move right after
-        move = engine.play(gboard, chess.engine.Limit(time=0.1))
+        move = engine.play(gboard, chess.engine.Limit(time=0.001))
         gboard.push(move.move)
         last_move_text = str(move.move)
-
+        last_eval_cp = material_eval(gboard)
         save_images(board, squares)
         print(f"Engine played: {move.move}")
         gboard_img = board_to_img(gboard, lastmove=move.move)
