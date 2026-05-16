@@ -14,6 +14,10 @@ import chess
 
 import cairosvg
 
+camera_crop_horiz = None
+camera_crop_vert = None
+
+board_rotation = None
 
 def run_inference(model, images):
     model.eval()
@@ -158,6 +162,33 @@ def extract_board(img):
 
     return result
 
+def preprocess_board(board):
+    global board_rotation, camera_crop_vert, camera_crop_horiz
+    board = board[camera_crop_vert:-camera_crop_vert, camera_crop_horiz:-camera_crop_horiz]
+    extracted_board = extract_board(board)
+    if board_rotation is None:
+        pieces = extract_chess_squares(extracted_board)
+        pieces_array = run_inference(model, pieces)
+        if pieces_array[0, 0] == "r" and pieces_array[0, 7] == "r":
+            board_rotation = 0
+        elif pieces_array[7, 0] == "r" and pieces_array[7, 7] == "r":
+            board_rotation = 180
+        elif pieces_array[0, 7] == "r" and pieces_array[7, 7] == "r":
+            board_rotation = -90
+        else:
+            board_rotation = 90
+
+        print(f"Board Rotation set to {board_rotation}")
+
+    if board_rotation == 90:
+        extracted_board = cv2.rotate(extracted_board, cv2.ROTATE_90_CLOCKWISE)
+    elif board_rotation == 180:
+        extracted_board = cv2.rotate(extracted_board, cv2.ROTATE_180)
+    elif board_rotation == -90:
+        extracted_board = cv2.rotate(extracted_board, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+    return extracted_board
+
 def board_to_numpy(board):
     arr = np.full((8, 8), '.', dtype='<U2')
     for sq in chess.SQUARES:
@@ -173,7 +204,7 @@ def board_to_img(board, size=480, lastmove=None):
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 # Set up chess engine
-engine = chess.engine.SimpleEngine.popen_uci("stockfish")
+engine = chess.engine.SimpleEngine.popen_uci("./stockfish-macos-m1-apple-silicon")
 gboard = chess.Board()
 gboard_img = board_to_img(gboard)
 
@@ -183,46 +214,20 @@ for row in npboard:
     print(" ".join(row))
 
 
-cap = cv2.VideoCapture("http://10.204.64.18:8080/video")  # IP Webcam URL
+cap = cv2.VideoCapture("http://192.168.2.21:8080/video")  # IP Webcam URL
 
-# ret, frame = cap.read()
-# roi = cv2.selectROI("select board", frame, showCrosshair=True)
-# x, y, w, h = roi
-# cv2.destroyAllWindows()
 
-# ======== Undo the camera lens distortion start
-corners = []
-
-def click(event, x, y, flags, param):
-    if event == cv2.EVENT_LBUTTONDOWN and len(corners) < 4:
-        corners.append([x, y])
-        print(f"corner {len(corners)}: ({x}, {y})")
 
 ret, frame = cap.read()
-cv2.imshow("pick corners", frame)
-cv2.setMouseCallback("pick corners", click)
-
-while len(corners) < 4:
-    cv2.waitKey(1)
-
-cv2.destroyAllWindows()
-pts_src = np.float32(corners)
-
-size = 1792  # output board size in pixels, 1792 = 224px per square
-pts_dst = np.float32([
-    [0,    0   ],
-    [size, 0   ],
-    [size, size],
-    [0,    size],
-])
-
-M = cv2.getPerspectiveTransform(pts_src, pts_dst)
+height, width, _ = frame.shape
+camera_crop_vert = int((0.1) * height)
+camera_crop_horiz = int((0.25) * width)
 
 # ======== Undo the camera lens distortion end
 
 # change mps to cpu or cuda for non Apple Silicon devices
-device = torch.device("cpu")
-model = torch.load("models/model4.pth", map_location="cpu", weights_only=False)
+device = torch.device("mps")
+model = torch.load("models/model5.pth", map_location="mps", weights_only=False)
 model.to(device)
 
 # main loop
@@ -230,9 +235,7 @@ last_move_text = None
 last_eval_cp = 0
 while True:
     ret, frame = cap.read()
-    # frame = frame[y:y + h, x:x + w] #cropping
-    # fixing camera warp based on the warp transform we got earlier
-    frame = cv2.warpPerspective(frame, M, (size, size))
+    frame = preprocess_board(frame)
     if not ret:
         break
 
