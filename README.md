@@ -2,6 +2,8 @@
 
 Digital Image Processing semester project that turns a live camera feed of a physical chess board into a fully playable game against Stockfish (or any engine of your choice).
 
+https://hamdannawaz582.github.io/SIChess/
+
 ## How It Works
 
 The project is split into 5 stages:
